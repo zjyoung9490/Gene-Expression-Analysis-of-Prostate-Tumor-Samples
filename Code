@@ -1,0 +1,297 @@
+#Load libraries
+library(GEOquery)
+library(marray)
+library(multtest)
+library(limma)
+library(MASS)
+library(samr)
+
+#Load Data
+dat <- getGEO(filename='C:\\Users\\mike1\\Downloads\\GDS4109_full.soft.gz')
+data <- dat@dataTable@table
+ann <- dat@dataTable@columns
+
+labels <- ann$disease.state
+
+#Subset data to only contain relevant info
+dat.non.norm <- data[3:81]
+
+#Subset data to only contain samples and normalize
+dat.norm <- log2(data[3:81])
+
+
+#Visualizing Normalization Effect
+par(mar = c(4, 4, 2, 2))
+boxplot(dat.non.norm[1:40], xlab = "Samples", ylab = "Gene Expression Values", main = "Boxplot of Non-Normalized Data\n Non-Recurrent Samples", axes = F)
+axis(1, at=1:40, labels = colnames(dat.non.norm[1:40]), las=2, cex.axis=0.5)
+axis(2)
+
+boxplot(dat.non.norm[41:79], xlab = "Samples", ylab = "Gene Expression Values", main = "Boxplot of Non-Normalized Data\n Recurrent Samples", axes = F)
+axis(1, at=1:39, labels = colnames(dat.non.norm[41:79]), las=2, cex.axis=0.5)
+axis(2)
+
+boxplot(dat.norm[1:40], xlab = "Samples", ylab = "Gene Expression Values", main = "Boxplot of Normalized Data\n Non-Recurrent Samples", axes = F)
+axis(1, at=1:40, labels = colnames(dat.norm[1:40]), las=2, cex.axis=0.5)
+axis(2)
+
+boxplot(dat.norm[41:79], xlab = "Samples", ylab = "Gene Expression Values", main = "Boxplot of Normalized Data\n Recurrent Samples", axes = F)
+axis(1, at=1:39, labels = colnames(dat.norm[41:79]), las=2, cex.axis=0.5)
+axis(2)
+
+#Test for outliers, provide visual proof and remove. 
+
+##Clustering dendrogram
+par(mar = c(1,1,1,1))
+
+data.dist <- dist(t(dat.norm), method="euclidean")
+data.clust <- hclust(data.dist, method="single")
+plot(data.clust,labels=names(dat.norm), main="Prostate Cancer Data Hierarchical Dendrogram", cex=0.75)
+
+#Potential Outliers inclued GSM617657, GSM617603, GSM617589, GSM617654 and GSM617629
+
+##CV vs. mean plot
+x.mean <- apply(dat.norm,2,mean)
+x.sd <- sqrt(apply(dat.norm,2,var))
+x.cv <- x.sd/x.mean
+par(mar = c(4,4,4,1))
+plot(x.mean, mgp=c(3,1,0), x.cv, main="Prostate Cancer Dataset: Sample CV vs. Mean",xlab="Mean",ylab="CV",col='blue',cex=1.5,type="n")
+points(x.mean, x.cv, bg="lightblue", col=1, pch=21)
+text(x.mean, x.cv, label=dimnames(dat.norm)[[2]], pos=2, cex=0.5)
+
+#Potential Ouliers include GSM617593, GSM617603, GSM617620, GSM617841, GSM617589
+
+
+## Average correlation plot 
+x.cor <- cor(dat.norm)
+x.avg <- apply(x.cor, 1, mean)
+par(oma=c(3,0.1,0.1,0.1))
+plot(c(1,length(x.avg)),range(x.avg),type="n",xlab="Sample",ylab="Avg r",main="Avg Correlation of Non-recurrent & Recurrent samples",axes=F)
+points(x.avg, bg="red", col=1, pch=21, cex=1.25)
+axis(1,at=c(1:length(x.avg)),labels=dimnames(dat.norm)[[2]],las=2,cex.lab=0.4,cex.axis=0.4)
+axis(2)
+abline(v=seq(0.5,79.5,1),col="grey")
+
+outlier <- which(x.avg < 0.86) 
+names(outlier) #appeared as potential outliers in all three tests -- both recurrent samples
+
+#remove both samples from data
+dat.norm <- subset(dat.norm, select = - c(GSM617589, GSM617603))
+
+
+#Filter out genes that have low expression values using some criterion. 
+dat.mean <- apply(dat.norm,1,mean)
+hist(dat.mean, main = "Distribution of Mean Gene Expression Values\n Prostate Cancer Data")
+bottom10 <- quantile(dat.mean, .1)
+abline(v=bottom10, col=2, lwd=2)
+
+#remove from data
+filter <- which(dat.mean > bottom10)
+dat.clean <- dat.norm[filter,]
+
+#Look at the distribution of the filtered data
+dat.mean2 <- apply(dat.clean,1,mean)
+hist(dat.mean2, xlab = "Mean", main = "Distribution of Mean Gene Expression Values\n After Removal of Low Expression Genes")
+dat.median <- apply(dat.clean,1,median)
+hist(dat.median, xlab = "Median", main = "Distribution of Median Gene Expression Values\n After Removal of Low Expression Genes")
+
+
+#Create standard deviation data frame
+dat.sd <- apply(dat.clean, 1, sd, na.rm = T)
+#Plot histogram
+hist(dat.sd, n=77, col="cyan", border="blue", main="", xlab="Standard Deviation (for data on the log2 scale)") 
+dens <- density(dat.var) 
+lines(dens$x, dens$y*par("usr")[4]/max(dens$y),col="red",lwd=2) 
+title("Histogram of Standard Deviations for 20,054 genes")
+
+#Next, conduct some method of feature selection with a statistical test or other machine learning method.  
+
+# SAM
+names(dat.clean) <- labels[1:77]
+pr.ann <- as.numeric(labels[1:77]) #the class labels must be 1 and 2 (not 0 and 1) 
+data=list(x=as.matrix(dat.clean), y=pr.ann, geneid=as.character(1:nrow(x)),genenames=paste("g",as.character(1:nrow(x)),sep="") , logged2=T)
+samr.obj<-samr(data,  resp.type="Two class unpaired", nperms=100)
+
+# look at distributions of observed and expected test statistics
+par(mfcol=c(1,2))
+hist(samr.obj$tt,col='red',main='SAM-observed test statistics')
+hist(samr.obj$evo,col='red',main='SAM-expected test statistics')
+
+# plot the observed vs. expected genes using a delta of +/-1
+par(mfcol=c(1,1))
+delta=1
+samr.plot(samr.obj,delta)
+title(main='Observed vs. Expected test statistics\n delta = 1')
+
+# plot the observed vs. expected genes using a delta of +/-0.5
+delta=0.5
+samr.plot(samr.obj,delta)
+title(main='Observed vs. Expected test statistics\n delta = 0.5')
+
+
+
+#Wilcox test 
+t.test.all.genes <- function(x,s1,s2) {
+  x1 <- x[s1]
+  x2 <- x[s2]
+  x1 <- as.numeric(x1)
+  x2 <- as.numeric(x2)
+  w.out <- wilcox.test(x1, x2, alternative = c("two.sided"), exact=F, correct=T)
+  out <- as.numeric(w.out$p.value)
+  return(out)
+}
+
+non.recurrent <- 1:40
+recurrent <- 41:77
+original.wmw.run <- apply(dat.clean,1,t.test.all.genes,s1=non.recurrent,s2=recurrent)
+
+sum(original.wmw.run<0.05)
+#3,245
+
+#Empirical Bayes method
+NR <- dat.clean[1:40]
+Re <- dat.clean[41:77]
+design <-cbind(Grp1=1, Grp2vs1=c(rep(1,length(NR)),rep(0,length(Re))))
+fit <- lmFit(dat.clean, design)
+dat_Bayes <- eBayes(fit)
+#Extract p-values
+eBayes_pvals <- dat_Bayes$p.value[,2]
+sum(eBayes_pvals<0.05)
+#3235
+
+#Adjust for multiplicity using benjamini hochberg correction - Wilcox P-values
+pv.adjust.WM <- p.adjust(original.wmw.run, method = "BH", n=length(original.wmw.run))
+sum(pv.adjust.WM < 0.1)
+#211
+sum(pv.adjust.WM < 0.05)
+#3
+
+hist(pv.adjust.WM,col="lightblue",xlab="p-values",main="Adjusted P-value dist’n between\nNon-recurrent and Recurrent groups",cex.main=0.9)
+abline(v=.1,col=2,lwd=2)
+hist(-log10(pv.adjust.WM),col="lightblue",xlab="log10(p-values)", main="-log10(pv) dist’n between\nNon-recurrent and Recurrent groups",cex.main=0.9)
+abline(v= -log10(.1),col=2,lwd=2)
+
+
+#Adjust for multiplicity using benjamini hochberg correction - Empirical Bayes P-values
+pv.adjust.EB <- p.adjust(eBayes_pvals, method="BH", n=length(eBayes_pvals))
+sum(pv.adjust.EB < 0.1)
+#182
+sum(pv.adjust.EB < 0.05)
+#3
+
+
+#Calculating Fold Changes
+nr.m <- apply(dat.clean[,non.recurrent],1,mean)
+r.m <- apply(dat.clean[,recurrent],1,mean)
+fold <- nr.m - r.m
+
+sum(fold > log2(2))
+#28
+sum(fold < -log2(2))
+#7
+sum(fold > log2(1.5))
+#349
+sum(fold < -log2(1.5))
+#151
+
+#Volcano plot
+p.trans <- -1 * log10(pv.adjust.WM)
+par(mfrow=c(1,1))
+plot(range(p.trans),range(fold),type='n',xlab='-1*log10(p-value)',ylab='fold change',main='Volcano Plot:\n Non-recurrent and Recurrent group differences')
+points(p.trans,fold,col='black',pch=21,bg=1)
+points(p.trans[(p.trans> -log10(.1) & fold>log2(1.5))], fold[(p.trans> -log10(.1) & fold > log2(1.5))], col=1,bg=2,pch=21)
+points(p.trans[(p.trans> -log10(.1) & fold< -log2(1.5))], fold[(p.trans> -log10(.1) & fold < -log2(1.5))] ,col=1,bg=3,pch=21)
+abline(v= -log10(.1))
+abline(h= -log2(1.5))
+abline(h= log2(1.5))
+
+high.vals <- p.trans[(p.trans> -log10(.1) & fold > log2(1.5))] #higher expression in non-recurrent tumors
+length(high.vals)
+#43
+low.vals <- p.trans[(p.trans> -log10(.1) & fold< -log2(1.5))] #higher expression in recurrent tumors
+length(low.vals)
+#18
+
+#combine into one list
+diff.exprs <- append(high.vals, low.vals)
+
+#plot scores of retained p-values
+hist(pv.adjust.WM[names(diff.exprs)], breaks = 10, xlab = "p-value", main = "Distribution of p-values for differentially expressed genes")
+
+
+
+#Subset data to only contain rows corresponding to differentially expressed genes
+dat.subset <- dat.clean[names(diff.exprs), ]
+
+
+#Principle Component Analysis
+colnames(dat.subset)[1:40] <- "NonR"
+colnames(dat.subset)[41:77] <- "Rec"
+dat.pca <- prcomp(t(dat.subset))
+dat.pca.2 <- dat.pca$x[,1:2]
+
+#Calculate kmeans on top 2 eigenfunctions with k=2
+kclust <- kmeans(dat.pca.2, centers=2, iter.max=25)
+
+#Scree plot
+dat.pca.var <- round(dat.pca$sdev^2 / sum(dat.pca$sdev^2)*100,2)
+plot(c(1:length(dat.pca.var)),dat.pca.var,type="b",xlab="# components",ylab="% variance",pch=21,col=1,bg=3,cex=1.5)
+title("Scree plot showing % variability explained by each eigenvalue\nProstate Cancer dataset")
+
+#Plot PCs 
+plot(dat.pca.2, col = kclust$cluster, pch = as.numeric(factor(names(kclust$cluster))), cex=1, xlab = "Principle Component 1", ylab = "Principle Component 2", main = "Kmeans Clustering of Prostate Data\n Top 2 Principle Components")
+points(kclust$centers, col = 1:2, pch = "*",cex=2.5)
+text(dat.pca.2, col = kclust$cluster, labels=names(kclust$cluster), cex=0.85, pos=3)
+legend(x=6, y=-4, c("Non-recurrent", "Recurrent"), pch = c(1:2))
+
+
+
+#Clean up data for classification
+dat.pca.2 <- as.data.frame(dat.pca.2)
+samples <- rownames(dat.pca.2)
+samples[grep("NonR",samples)] <- rep("NR",length(samples[grep("NonR",samples)]))
+samples[grep("Rec",samples)] <- rep("R",length(samples[grep("Rec",samples)]))
+dat.pca.2$Sample <- samples
+
+
+
+#Classification
+#Split data into roughly 75% training and 25% testing
+dat.train <- dat.pca.2[c(1:28, 41:67), ]
+dat.test <- dat.pca.2[c(29:40, 68:77), ]
+test.samples <- dat.test[, 3]
+dat.test <- dat.test[, -3]
+
+dat.lda <- lda(dat.train$Sample ~ ., dat.train)
+dat.pred <- predict(dat.lda, dat.test)
+table(dat.pred$class, test.samples)
+par(mar=c(4,4,2,2))
+plot(dat.pred$x, bg=as.numeric(factor(test.samples)), pch=as.numeric(factor(test.samples)), col=as.numeric(dat.pred$class), ylab="Discriminant function", axes=T, xlab="Test Sample", main="Discriminant function for Prostate Cancer Dataset")
+legend(x=2, y=3, c("Non-Recurrent", "Recurrent"), fill=c(1:2), title="Predicted Class Membership")
+legend(x=15, y=-0.5, c("Non-Recurrent", "Recurrent"), pch=c(1:2), title="Actual Class Membership")
+
+
+#Access top 5 and bottom 5 expressed genes with gene information
+dat.sig.genes <- data[filter,]
+dat.sig.genes <- dat.sig.genes[names(diff.exprs), ] 
+high.5 <- tail(sort(high.vals), 5)
+high.5 <- dat.sig.genes[names(high.5), c(1:2, 82)]
+low.5 <- tail(sort(low.vals), 5)
+low.5 <- dat.sig.genes[names(low.5), c(1:2, 82)]
+
+
+#Gene Profile Plot of most significantly differentially expressed genes between two conditions
+DNM2 <- as.numeric(dat.sig.genes["15396", 3:79])
+plot(range(1:77),range(DNM2),type="n",xlab="Samples",ylab="Intensity",main="DNM2 Gene Profile for Different Samples") 
+lines(1:77,(DNM2), col="green") 
+grid(col="grey")
+
+f <- c(rep("Non-Recurrent",40),rep("Recurrent",37))
+boxplot(DNM2~f, type= "n", xlab="Samples", ylab="Intensity", main= "DNM2 Gene Profiles", col="blue")
+
+CDC14B <- as.numeric(dat.sig.genes["10764", 3:79])
+plot(range(1:77),range(CDC14B),type="n",xlab="Samples",ylab="Intensity",main="CDC14B Gene Profile for Different Samples") 
+lines(1:77,(CDC14B), col="green") 
+grid(col="grey")
+
+boxplot(CDC14B~f, type= "n", xlab="Samples", ylab="Intensity", main= "CDC14B Gene Profiles", col="blue")
+
